@@ -51,7 +51,7 @@ dailyLossLimitHit = dailyDrawdownPct >= maxDailyLossPct
 // HTF 趋势（EMA 方向）
 //==================================================
 htfClose = request.security("BINANCE:BTCUSDT", htf, close)
-htfEMA   = request.security("BINANCE:BTCUSDT", htf, ta.ema(close, 50))
+htfEMA   = request.security("BINANCE:BTCUSDT", htf, ta.ema(close, 55))
 
 trendUp   = htfClose > htfEMA
 trendDown = htfClose < htfEMA
