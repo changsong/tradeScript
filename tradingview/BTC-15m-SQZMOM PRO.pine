@@ -100,6 +100,7 @@ shortCond =
      l_val < 0 and
      l_val < l_val[1]
 
+
 //==================================================
 // 🎯 分批止盈执行
 //==================================================
@@ -107,11 +108,31 @@ if longCond
     strategy.entry("LONG", strategy.long)
     strategy.exit("TP1_L", "LONG", limit = close + atr * dynRR, qty_percent = 50)
     strategy.exit("TP2_L", "LONG", stop  = close - atr)
+    alert(
+            '{"symbol":"' + syminfo.ticker +
+            '","side":"LONG"' +
+            ',"entry":' + str.tostring(close) +
+            ',"stop":' + str.tostring(close - atr) +
+            ',"tp1":' + str.tostring(close + atr * dynRR * 0.5) +
+            ',"tp2":' + str.tostring(close + atr * dynRR) +
+            ',"strategy":"SQZMOM_PRO_v3"}',
+            alert.freq_once_per_bar_close
+    )
 
 if shortCond
     strategy.entry("SHORT", strategy.short)
     strategy.exit("TP1_S", "SHORT", limit = close - atr * dynRR, qty_percent = 50)
     strategy.exit("TP2_S", "SHORT", stop  = close + atr)
+    alert(
+    '{"symbol":"' + syminfo.ticker +
+    '","side":"SHORT"' +
+    ',"entry":' + str.tostring(close) +
+    ',"stop":' + str.tostring(close + atr) +
+    ',"tp1":' + str.tostring(close - atr * dynRR * 0.5) +
+    ',"tp2":' + str.tostring(close - atr * dynRR) +
+    ',"strategy":"SQZMOM_PRO_v3"}',
+    alert.freq_once_per_bar_close
+    )
 
 //==================================================
 // 💡 Paper Trading 状态监控（诊断 entry）
@@ -124,37 +145,6 @@ if barstate.isrealtime and strategy.position_size == 0
 hasPosition = strategy.position_size != 0
 hasTrades   = strategy.closedtrades > 0
 
-//==================================================
-// 🚨 Webhook Alerts（与策略入场同步）
-//==================================================
-canAlert =
-     barstate.isrealtime and
-     (longCond or shortCond) and
-     strategy.position_size == 0  // 空仓才发
-
-if canAlert
-    if longCond
-        alert(
-            '{"symbol":"' + syminfo.ticker +
-            '","side":"LONG"' +
-            ',"entry":' + str.tostring(close) +
-            ',"stop":' + str.tostring(close - atr) +
-            ',"tp1":' + str.tostring(close + atr * dynRR * 0.5) +
-            ',"tp2":' + str.tostring(close + atr * dynRR) +
-            ',"strategy":"SQZMOM_PRO_v3"}',
-            alert.freq_once_per_bar_close
-        )
-    if shortCond
-        alert(
-            '{"symbol":"' + syminfo.ticker +
-            '","side":"SHORT"' +
-            ',"entry":' + str.tostring(close) +
-            ',"stop":' + str.tostring(close + atr) +
-            ',"tp1":' + str.tostring(close - atr * dynRR * 0.5) +
-            ',"tp2":' + str.tostring(close - atr * dynRR) +
-            ',"strategy":"SQZMOM_PRO_v3"}',
-            alert.freq_once_per_bar_close
-        )
 
 //==================================================
 // 📊 图表角落显示状态面板
