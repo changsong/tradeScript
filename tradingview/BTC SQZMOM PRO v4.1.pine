@@ -1,42 +1,41 @@
 //@version=6
 strategy(
-     "BTC SQZMOM PRO v4.1 SAFE",
-     overlay=false,
+     "BTC SQZMOM PRO v3.0 + Paper Trading + Panel",
+     overlay=true,
      initial_capital=100000,
      pyramiding=0,
      default_qty_type=strategy.percent_of_equity,
      default_qty_value=100,
      commission_type=strategy.commission.percent,
-     commission_value=0.04,
-     calc_on_every_tick=false,
-     process_orders_on_close=true)
+     commission_value=0.08,
+     calc_on_every_tick=true,
+     process_orders_on_close=false)
 
 //==================================================
-// 参数
+// 🔧 参数
 //==================================================
-bbLen  = input.int(20)
-bbMult = input.float(2.0)
-kcLen  = input.int(20)
-kcMult = input.float(1.5)
-useTR  = input.bool(true)
-
-htfTF  = input.timeframe("60")
-emaLen = input.int(200)
-atrLen = input.int(14)
-
-baseRR = input.float(1.8)
-maxRR  = input.float(3.0)
-
-maxLossStreak = input.int(3)
+bbLen   = input.int(20, "BB Length")
+bbMult  = input.float(2.0, "BB Mult")
+kcLen   = input.int(20, "KC Length")
+kcMult  = input.float(1.5, "KC Mult")
+useTR   = input.bool(true, "Use TrueRange")
+htfTF   = input.timeframe("60", "HTF")
+emaLen  = input.int(200, "EMA Trend")
+atrLen  = input.int(14, "ATR")
+baseRR  = input.float(1.8, "Base RR")
+maxRR   = input.float(3.0, "Max RR")
+maxLossStreak = input.int(3, "Max Losing Streak")
 
 //==================================================
-// 时段过滤（UTC）
+// ⏰ BTC 时段过滤（UTC）
 //==================================================
 h = hour(time)
-sessionOK = (h >= 0 and h <= 8) or (h >= 13 and h <= 20)
+asia  = h >= 0  and h <= 8
+us    = h >= 13 and h <= 20
+sessionOK = asia or us
 
 //==================================================
-// SQZMOM 函数（稳定版）
+// 📐 SQZMOM 函数
 //==================================================
 f_sqzmom(_src) =>
     basis = ta.sma(_src, bbLen)
@@ -50,66 +49,111 @@ f_sqzmom(_src) =>
     upperKC = ma + rangema * kcMult
     lowerKC = ma - rangema * kcMult
 
-    sqzOn  = lowerBB > lowerKC and upperBB < upperKC
-    sqzOff = lowerBB < lowerKC and upperBB > upperKC
+    sqzOn  = (lowerBB > lowerKC) and (upperBB < upperKC)
+    sqzOff = (lowerBB < lowerKC) and (upperBB > upperKC)
 
-    mid1 = (ta.highest(high, kcLen) + ta.lowest(low, kcLen)) / 2
-    mid2 = (mid1 + ta.sma(close, kcLen)) / 2
-    val  = ta.linreg(_src - mid2, kcLen, 0)
+    mid = (ta.highest(high, kcLen) + ta.lowest(low, kcLen)) / 2
+    mid2 = (mid + ta.sma(close, kcLen)) / 2
+    val = ta.linreg(_src - mid2, kcLen, 0)
 
     [sqzOn, sqzOff, val]
 
 //==================================================
-// HTF & LTF
+// 🔹 LTF & HTF SQZMOM
 //==================================================
-[l_on, l_off, l_val] = f_sqzmom(close)
-[h_on, h_off, h_val] = request.security(syminfo.tickerid, htfTF, f_sqzmom(close))
+[l_sqzOn, l_sqzOff, l_val] = f_sqzmom(close)
+[h_sqzOn, h_sqzOff, h_val] = request.security(syminfo.tickerid, htfTF, f_sqzmom(close))
 
 //==================================================
-// 趋势 & 风控
+// 📈 趋势 & 风控
 //==================================================
 ema200 = ta.ema(close, emaLen)
 atr    = ta.atr(atrLen)
-
 strength = math.abs(l_val) / atr
 dynRR = math.min(maxRR, baseRR + strength)
 
 //==================================================
-// 连续亏损熔断
+// 🚫 连续亏损熔断
 //==================================================
 var int lossStreak = 0
 if strategy.closedtrades > 0
     lastPL = strategy.closedtrades.profit(strategy.closedtrades - 1)
     lossStreak := lastPL < 0 ? lossStreak + 1 : 0
-
 canTrade = lossStreak < maxLossStreak
 
 //==================================================
-// 入场条件（黄金窗口）
+// ✅ 入场条件（黄金窗口）
 //==================================================
-longCond = sessionOK and canTrade and close > ema200 and h_off and l_off and l_val > 0 and l_val > l_val[1]
-shortCond = sessionOK and canTrade and close < ema200 and h_off and l_off and l_val < 0 and l_val < l_val[1]
+longCond =
+    //  sessionOK and
+    //  canTrade and
+     close > ema200 
+    //  and
+    //  h_sqzOff and
+    //  l_sqzOff and
+    //  l_val > 0 and
+    //  l_val > l_val[1]
+
+shortCond =
+     sessionOK and
+     canTrade and
+     close < ema200 and
+     h_sqzOff and
+     l_sqzOff and
+     l_val < 0 and
+     l_val < l_val[1]
 
 //==================================================
-// 交易执行（双 TP + 统一止损）
+// 🎯 分批止盈执行
 //==================================================
 if longCond
     strategy.entry("LONG", strategy.long)
-    strategy.exit("TP1_L", "LONG", limit = close + atr * dynRR)
-    strategy.exit("SL_L",  "LONG", stop  = close - atr)
+    strategy.exit("TP1_L", "LONG", limit = close + atr * dynRR, qty_percent = 50)
+    strategy.exit("TP2_L", "LONG", stop  = close - atr)
 
 if shortCond
     strategy.entry("SHORT", strategy.short)
-    strategy.exit("TP1_S", "SHORT", limit = close - atr * dynRR)
-    strategy.exit("SL_S",  "SHORT", stop  = close + atr)
+    strategy.exit("TP1_S", "SHORT", limit = close - atr * dynRR, qty_percent = 50)
+    strategy.exit("TP2_S", "SHORT", stop  = close + atr)
 
 //==================================================
-// 可视化
+// 💡 Paper Trading 状态监控（诊断 entry）
 //==================================================
-plot(l_val,
-     style=plot.style_histogram,
-     color = l_val > 0 ? (l_val > l_val[1] ? color.lime : color.green)
-                       : (l_val < l_val[1] ? color.red : color.maroon),
-     linewidth=4)
+var bool paperEntryTriggered = false
+if barstate.isrealtime and strategy.position_size == 0
+    strategy.entry("diag_entry", strategy.long)
+    paperEntryTriggered := true
 
-plot(0, color = l_on ? color.black : l_off ? color.gray : color.blue)
+hasPosition = strategy.position_size != 0
+hasTrades   = strategy.closedtrades > 0
+
+//==================================================
+// 📊 图表角落显示状态面板
+//==================================================
+string statusText = ""
+color  statusColor = color.gray
+if not barstate.isrealtime
+    statusText  := "🔴 未接管（非实时）"
+    statusColor := color.red
+else if hasPosition or hasTrades
+    statusText  := "🟢 已接管（BTC SQZMOM PRO）"
+    statusColor := color.green
+else if paperEntryTriggered
+    statusText  := "🟡 等待成交"
+    statusColor := color.orange
+else
+    statusText  := "🔴 未接管"
+    statusColor := color.red
+
+var table panel = table.new(position.top_right, 1, 1, border_width = 1)
+if barstate.islast
+    table.cell(panel, 0, 0, statusText, bgcolor = statusColor, text_color = color.white, text_size = size.small)
+
+//==================================================
+// ⚡ 提示
+//==================================================
+// Webhook / Alert 触发方法：
+// 1. 打开 TradingView Alert
+// 2. 类型选择 “Order fills or any order in the strategy”
+// 3. 填写 Webhook URL
+// 4. 下单、止盈、诊断 entry 都会触发 Alerts
