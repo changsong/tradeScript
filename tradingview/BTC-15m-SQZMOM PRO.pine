@@ -1,6 +1,6 @@
 //@version=6
 strategy(
-     "BTC SQZMOM PRO v3.0 + Paper Trading + Panel",
+     "BTC SQZMOM PRO v2 (15m + 1H Filter)",
      overlay=true,
      initial_capital=100000,
      pyramiding=0,
@@ -72,9 +72,7 @@ atr    = ta.atr(atrLen)
 strength = math.abs(l_val) / atr
 dynRR = math.min(maxRR, baseRR + strength)
 
-//==================================================
-// 🚫 连续亏损熔断
-//==================================================
+// 连续亏损熔断
 var int lossStreak = 0
 if strategy.closedtrades > 0
     lastPL = strategy.closedtrades.profit(strategy.closedtrades - 1)
@@ -82,17 +80,16 @@ if strategy.closedtrades > 0
 canTrade = lossStreak < maxLossStreak
 
 //==================================================
-// ✅ 入场条件（黄金窗口）
+// ✅ 入场条件
 //==================================================
 longCond =
-    //  sessionOK and
-    //  canTrade and
-     close > ema200 
-    //  and
-    //  h_sqzOff and
-    //  l_sqzOff and
-    //  l_val > 0 and
-    //  l_val > l_val[1]
+     sessionOK and
+     canTrade and
+     close > ema200 and
+     h_sqzOff and
+     l_sqzOff and
+     l_val > 0 and
+     l_val > l_val[1]
 
 shortCond =
      sessionOK and
@@ -128,6 +125,38 @@ hasPosition = strategy.position_size != 0
 hasTrades   = strategy.closedtrades > 0
 
 //==================================================
+// 🚨 Webhook Alerts（与策略入场同步）
+//==================================================
+canAlert =
+     barstate.isrealtime and
+     (longCond or shortCond) and
+     strategy.position_size == 0  // 空仓才发
+
+if canAlert
+    if longCond
+        alert(
+            '{"symbol":"' + syminfo.ticker +
+            '","side":"LONG"' +
+            ',"entry":' + str.tostring(close) +
+            ',"stop":' + str.tostring(close - atr) +
+            ',"tp1":' + str.tostring(close + atr * dynRR * 0.5) +
+            ',"tp2":' + str.tostring(close + atr * dynRR) +
+            ',"strategy":"SQZMOM_PRO_v3"}',
+            alert.freq_once_per_bar_close
+        )
+    if shortCond
+        alert(
+            '{"symbol":"' + syminfo.ticker +
+            '","side":"SHORT"' +
+            ',"entry":' + str.tostring(close) +
+            ',"stop":' + str.tostring(close + atr) +
+            ',"tp1":' + str.tostring(close - atr * dynRR * 0.5) +
+            ',"tp2":' + str.tostring(close - atr * dynRR) +
+            ',"strategy":"SQZMOM_PRO_v3"}',
+            alert.freq_once_per_bar_close
+        )
+
+//==================================================
 // 📊 图表角落显示状态面板
 //==================================================
 string statusText = ""
@@ -148,12 +177,3 @@ else
 var table panel = table.new(position.top_right, 1, 1, border_width = 1)
 if barstate.islast
     table.cell(panel, 0, 0, statusText, bgcolor = statusColor, text_color = color.white, text_size = size.small)
-
-//==================================================
-// ⚡ 提示
-//==================================================
-// Webhook / Alert 触发方法：
-// 1. 打开 TradingView Alert
-// 2. 类型选择 “Order fills or any order in the strategy”
-// 3. 填写 Webhook URL
-// 4. 下单、止盈、诊断 entry 都会触发 Alerts

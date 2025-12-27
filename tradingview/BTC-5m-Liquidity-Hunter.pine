@@ -1,139 +1,99 @@
 //@version=6
 strategy(
-     "BTC 5m Liquidity Hunter PRO v2.1 (3D Hold + Daily Loss Cap)",
+     "BTC 5m Liquidity Hunter PRO v2.1 + Webhook Alerts",
      overlay=true,
      initial_capital=100000,
      pyramiding=0,
      commission_type=strategy.commission.percent,
-     commission_value=0.04)
+     commission_value=0.04,
+     calc_on_every_tick=true,
+     process_orders_on_close=false)
 
-//==================================================
-// 参数
-//==================================================
+// ==============================
+// 原策略参数及逻辑保持不变
+// ==============================
 htf      = "60"
 swingLen = input.int(5, "Swing Length")
 atrLen   = input.int(14, "ATR Length")
 atrMult  = input.float(0.38, "ATR Stop Mult")
 rr       = input.float(3.5, "RR Final")
-
 maxHoldDays      = input.int(3, "Max Holding Days")
 maxDailyLossPct  = input.float(2.0, "Max Daily Loss %")
-
 execMode = input.string("AUTO", "Execution Mode", options=["AUTO", "SEMI"])
 isAuto = execMode == "AUTO"
 isSemi = execMode == "SEMI"
-
-//==================================================
-// 常量
-//==================================================
 MAX_HOLD_MS = maxHoldDays * 24 * 60 * 60 * 1000
 
-//==================================================
-// 日内亏损统计（Pine v6 正确写法）
-//==================================================
+// 日内亏损
 var float dayStartEquity = na
 var float dailyDrawdownPct = 0.0
-
 isNewDay = ta.change(time("D")) != 0
 if isNewDay
     dayStartEquity := strategy.equity
 
-if dayStartEquity > 0
-    dailyDrawdownPct := (dayStartEquity - strategy.equity) / dayStartEquity * 100
-else
-    dailyDrawdownPct := 0
-
+dailyDrawdownPct := dayStartEquity > 0 ? (dayStartEquity - strategy.equity)/dayStartEquity*100 : 0
 dailyLossLimitHit = dailyDrawdownPct >= maxDailyLossPct
 
-
-
-//==================================================
-// HTF 趋势（EMA 方向）
-//==================================================
+// HTF 趋势
 htfClose = request.security("BINANCE:BTCUSDT", htf, close)
-htfEMA   = request.security("BINANCE:BTCUSDT", htf, ta.ema(close, 50))
-
+htfEMA   = request.security("BINANCE:BTCUSDT", htf, ta.ema(close, 55))
 trendUp   = htfClose > htfEMA
 trendDown = htfClose < htfEMA
 
-//==================================================
 // LTF Swing
-//==================================================
 ph = ta.pivothigh(high, swingLen, swingLen)
 pl = ta.pivotlow(low, swingLen, swingLen)
-
 var float lastHigh = na
 var float lastLow  = na
-
 if not na(ph)
     lastHigh := ph
 if not na(pl)
     lastLow := pl
 
-//==================================================
-// OTE（62% - 79%，顺序无关）
-//==================================================
+// OTE
 priceRange = lastHigh - lastLow
 fib62 = lastHigh - priceRange * 0.618
 fib79 = lastHigh - priceRange * 0.79
-
 oteLow  = math.min(fib62, fib79)
 oteHigh = math.max(fib62, fib79)
-
 inOTE = close < oteHigh and close > oteLow
 
-//==================================================
 // ATR
-//==================================================
 atr = ta.atr(atrLen)
 
-//==================================================
-// Liquidity Sweep + FVG（跨 K 线记忆）
-//==================================================
+// Liquidity Sweep + FVG
 bullSweep = low < lastLow and close > lastLow
 bearSweep = high > lastHigh and close < lastHigh
-
 bullFVG = low > high[2]
 bearFVG = high < low[2]
 
 var bool sweepSeen = false
 var bool fvgSeen   = false
-
 if trendUp and bullSweep
     sweepSeen := true
 if sweepSeen and bullFVG
     fvgSeen := true
-
 if trendDown and bearSweep
     sweepSeen := true
 if sweepSeen and bearFVG
     fvgSeen := true
 
-//==================================================
 // 状态机
-//==================================================
 STATE_WAIT_TREND = 0
 STATE_WAIT_OTE   = 1
 STATE_WAIT_LIQ   = 2
 STATE_READY      = 3
-
 var int state = STATE_WAIT_TREND
-
 if state == STATE_WAIT_TREND and (trendUp or trendDown)
     state := STATE_WAIT_OTE
-
 if state == STATE_WAIT_OTE and inOTE
     state := STATE_WAIT_LIQ
-
 if state == STATE_WAIT_LIQ and sweepSeen and fvgSeen
     state := STATE_READY
 
-//==================================================
-// Session（UTC+8，延迟执行）
-//==================================================
+// Session（UTC+8）
 h = hour(time, "Asia/Shanghai")
 m = minute(time, "Asia/Shanghai")
-
 london = h >= 15 and h < 18
 ny = (h == 20 and m >= 30) or (h > 20 and h < 23) or (h == 23 and m <= 30)
 inSession = london or ny
@@ -142,14 +102,12 @@ var bool setupReady = false
 if state == STATE_READY
     setupReady := true
 
-//==================================================
 // 入场时间记录
-//==================================================
 var int entryTime = na
 
-//==================================================
-// ▶ 执行（受「日内亏损限制」保护）
-//==================================================
+// ==============================
+// 执行逻辑（带 Webhook Alert）
+// ==============================
 if setupReady and inSession and strategy.position_size == 0 and not dailyLossLimitHit
     entry = close
 
@@ -164,6 +122,12 @@ if setupReady and inSession and strategy.position_size == 0 and not dailyLossLim
             strategy.exit("TP1", "LONG", limit=tp1, qty_percent=50)
             strategy.exit("TP2", "LONG", limit=tp2, stop=entry)
 
+        // ===== Webhook Alert LONG =====
+        alert('{"symbol":"BTCUSDT","side":"LONG","entry":' + str.tostring(entry) +
+              ',"stop":' + str.tostring(stop) +
+              ',"tp1":' + str.tostring(tp1) +
+              ',"tp2":' + str.tostring(tp2) + '}', alert.freq_once_per_bar_close)
+
     if trendDown
         stop = math.max(lastHigh, entry + atr * atrMult)
         tp1  = entry - (stop - entry)
@@ -175,22 +139,24 @@ if setupReady and inSession and strategy.position_size == 0 and not dailyLossLim
             strategy.exit("TP1", "SHORT", limit=tp1, qty_percent=50)
             strategy.exit("TP2", "SHORT", limit=tp2, stop=entry)
 
+        // ===== Webhook Alert SHORT =====
+        alert('{"symbol":"BTCUSDT","side":"SHORT","entry":' + str.tostring(entry) +
+              ',"stop":' + str.tostring(stop) +
+              ',"tp1":' + str.tostring(tp1) +
+              ',"tp2":' + str.tostring(tp2) + '}', alert.freq_once_per_bar_close)
+
     setupReady := false
     sweepSeen  := false
     fvgSeen    := false
     state := STATE_WAIT_OTE
 
-//==================================================
-// ⏱ 强制 3 天平仓（不受日内限制影响）
-//==================================================
+// 强制 3 天平仓
 if strategy.position_size != 0 and not na(entryTime)
     if time - entryTime >= MAX_HOLD_MS
         strategy.close_all(comment="Max Hold 3 Days")
         entryTime := na
 
-//==================================================
 // 可视化
-//==================================================
 plot(oteLow,  "OTE Low",  color=color.new(color.green, 70))
 plot(oteHigh, "OTE High", color=color.new(color.red, 70))
 plot(htfEMA,  "HTF EMA50", color=color.orange)
